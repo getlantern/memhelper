@@ -3,6 +3,7 @@ package memhelper
 import (
 	"os"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,11 +16,15 @@ import (
 var (
 	log = golog.LoggerFor("memhelper")
 
-	memory        uint64
-	logMemStatsCh = make(chan *memoryInfo)
+	mem atomic.Value
 
 	runOnce sync.Once
 )
+
+type memoryInfo struct {
+	mi       *process.MemoryInfoStat
+	memstats *runtime.MemStats
+}
 
 // Track refreshes memory stats every refreshInterval and logs them every logPeriod.
 func Track(refreshInterval time.Duration, logPeriod time.Duration) {
@@ -28,9 +33,26 @@ func Track(refreshInterval time.Duration, logPeriod time.Duration) {
 	})
 }
 
-type memoryInfo struct {
-	mi       *process.MemoryInfoStat
-	memstats *runtime.MemStats
+// TrackAndLimit tracks memory usage like Track and also tries to limit resident
+// size (physical memory usage) to the given limitInBytes, applying the limit
+// every limitPeriod.
+func TrackAndLimit(refreshInterval time.Duration, logPeriod time.Duration, limitPeriod time.Duration, limitInBytes int) {
+	runOnce.Do(func() {
+		go trackMemStats(refreshInterval, logPeriod)
+		go limitRSS(limitPeriod, uint64(limitInBytes))
+	})
+}
+
+func setMem(_mem *memoryInfo) {
+	mem.Store(_mem)
+}
+
+func getMem() *memoryInfo {
+	_mem := mem.Load()
+	if _mem == nil {
+		return nil
+	}
+	return _mem.(*memoryInfo)
 }
 
 func trackMemStats(refreshInterval time.Duration, logPeriod time.Duration) {
@@ -57,40 +79,45 @@ func updateMemStats() {
 	}
 	memstats := &runtime.MemStats{}
 	runtime.ReadMemStats(memstats)
-	atomic.StoreUint64(&memory, memstats.Alloc)
-	mem := &memoryInfo{
+	setMem(&memoryInfo{
 		mi:       mi,
 		memstats: memstats,
-	}
-	select {
-	case logMemStatsCh <- mem:
-		// will get logged
-	default:
-		// won't get logged because we're busy
-	}
+	})
 }
 
-// log the most recent available memstats every 10 seconds
 func logMemStats(period time.Duration) {
 	t := time.NewTicker(period)
 	defer t.Stop()
 
-	var mem *memoryInfo
-	var more bool
-	for {
-		select {
-		case mem, more = <-logMemStatsCh:
-			if !more {
-				return
-			}
-		case <-t.C:
-			mi := mem.mi
-			memstats := mem.memstats
-			log.Debugf("Memory InUse: %v    Alloc: %v    Sys: %v     RSS: %v",
-				humanize.Bytes(memstats.HeapInuse),
-				humanize.Bytes(memstats.Alloc),
-				humanize.Bytes(memstats.Sys),
-				humanize.Bytes(mi.RSS))
+	for range t.C {
+		mem := getMem()
+		if mem == nil {
+			continue
+		}
+		mi := mem.mi
+		memstats := mem.memstats
+		log.Debugf("Memory InUse: %v    Alloc: %v    Sys: %v     RSS: %v",
+			humanize.Bytes(memstats.HeapInuse),
+			humanize.Bytes(memstats.Alloc),
+			humanize.Bytes(memstats.Sys),
+			humanize.Bytes(mi.RSS))
+	}
+}
+
+func limitRSS(period time.Duration, limit uint64) {
+	log.Debugf("Will attempt to limit RSS to %v", humanize.Bytes(limit))
+	t := time.NewTicker(period)
+	defer t.Stop()
+
+	for range t.C {
+		mem := getMem()
+		if mem == nil {
+			continue
+		}
+		if mem.mi.RSS > limit {
+			log.Debugf("Resident size of %v exceeds limit of %v, attempting to free OS memory", humanize.Bytes(mem.mi.RSS), humanize.Bytes(limit))
+			runtime.GC()
+			debug.FreeOSMemory()
 		}
 	}
 }
