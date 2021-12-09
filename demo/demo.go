@@ -15,7 +15,7 @@ var (
 
 func main() {
 	log.Debug("This program will print memory stats a few times and then exit")
-	memhelper.TrackAndLimit(1*time.Second, 1*time.Second, 1*time.Second, 9000000)
+	memhelper.Track(1*time.Second, 1*time.Second)
 	for i := 0; i < 200; i++ {
 		retained = append(retained, make([]byte, 1024768))
 		time.Sleep(10 * time.Millisecond)
