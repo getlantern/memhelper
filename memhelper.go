@@ -27,9 +27,9 @@ type memoryInfo struct {
 }
 
 // Track refreshes memory stats every refreshInterval and logs them every logPeriod.
-func Track(refreshInterval time.Duration, logPeriod time.Duration) {
+func Track(refreshInterval time.Duration, logPeriod time.Duration, errorFunc func(error)) {
 	runOnce.Do(func() {
-		go trackMemStats(refreshInterval, logPeriod)
+		go trackMemStats(refreshInterval, logPeriod, errorFunc)
 	})
 }
 
@@ -38,7 +38,7 @@ func Track(refreshInterval time.Duration, logPeriod time.Duration) {
 // every limitPeriod.
 func TrackAndLimit(refreshInterval time.Duration, logPeriod time.Duration, limitPeriod time.Duration, limitInBytes int) {
 	runOnce.Do(func() {
-		go trackMemStats(refreshInterval, logPeriod)
+		go trackMemStats(refreshInterval, logPeriod, func(error) {})
 		go limitRSS(limitPeriod, uint64(limitInBytes))
 	})
 }
@@ -55,26 +55,26 @@ func getMem() *memoryInfo {
 	return _mem.(*memoryInfo)
 }
 
-func trackMemStats(refreshInterval time.Duration, logPeriod time.Duration) {
+func trackMemStats(refreshInterval time.Duration, logPeriod time.Duration, errorFunc func(error)) {
 	var logOnce sync.Once
 	for {
 		logOnce.Do(func() {
 			go logMemStats(logPeriod)
 		})
-		updateMemStats()
+		updateMemStats(errorFunc)
 		time.Sleep(refreshInterval)
 	}
 }
 
-func updateMemStats() {
+func updateMemStats(errorFunc func(error)) {
 	p, err := process.NewProcess(int32(os.Getpid()))
 	if err != nil {
-		log.Errorf("Unable to get process info: %v", err)
+		errorFunc(log.Errorf("Unable to get process info: %w", err))
 		return
 	}
 	mi, err := p.MemoryInfo()
 	if err != nil {
-		log.Errorf("Unable to get memory info for process: %v", err)
+		errorFunc(log.Errorf("Unable to get memory info for process: %w", err))
 		return
 	}
 	memstats := &runtime.MemStats{}
