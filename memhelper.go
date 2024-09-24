@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
-	"github.com/getlantern/golog"
 	"github.com/shirou/gopsutil/process"
+
+	"github.com/getlantern/golog"
 )
 
 var (
@@ -69,12 +70,12 @@ func trackMemStats(refreshInterval time.Duration, logPeriod time.Duration, error
 func updateMemStats(errorFunc func(error)) {
 	p, err := process.NewProcess(int32(os.Getpid()))
 	if err != nil {
-		errorFunc(log.Errorf("Unable to get process info: %w", err))
+		errorFunc(log.Errorf("Unable to get process info: %v", err))
 		return
 	}
 	mi, err := p.MemoryInfo()
 	if err != nil {
-		errorFunc(log.Errorf("Unable to get memory info for process: %w", err))
+		errorFunc(log.Errorf("Unable to get memory info for process: %v", err))
 		return
 	}
 	memstats := &runtime.MemStats{}
